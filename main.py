@@ -59,8 +59,12 @@ def run(privacy_status: str = "public", dry_run: bool = False, topic: str | None
             # Тем не хватает без повторов — добираем случайными
             topics_for_run = pool + [random.choice(TOPICS) for _ in range(count - len(pool))]
 
+        import time
     for i, t in enumerate(topics_for_run, start=1):
         make_one_video(topic=t, index=i, privacy_status=privacy_status, dry_run=dry_run)
+        if i < len(topics_for_run):
+            time.sleep(20)
+
 
     print(f"\nГотово: собрано и {'подготовлено' if dry_run else 'опубликовано'} видео: {count}")
 
