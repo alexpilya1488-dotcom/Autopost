@@ -1,0 +1,54 @@
+name: Facts Bot
+
+on:
+  schedule:
+    - cron: '0 12 * * *'  # каждый день в 12:00 UTC — поменяй время как удобно
+  workflow_dispatch:       # ручной запуск кнопкой во вкладке Actions
+    inputs:
+      privacy:
+        description: 'Приватность видео: public / unlisted / private'
+        required: false
+        default: 'public'
+      dry_run:
+        description: 'true = собрать видео, но не публиковать (для проверки)'
+        required: false
+        default: 'false'
+
+jobs:
+  make-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v4
+
+      - name: Установить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Установить ffmpeg и шрифты
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+
+      - name: Установить зависимости
+        run: pip install -r requirements.txt
+
+      - name: Запустить пайплайн
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          ARGS="--privacy ${{ github.event.inputs.privacy || 'public' }}"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          python main.py $ARGS
+
+      - name: Сохранить собранные видео как файлы для скачивания
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos
+          path: output_*.mp4
+          if-no-files-found: ignore
