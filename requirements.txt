@@ -5,3 +5,4 @@ moviepy>=2.0,<3.0
 Pillow>=10.0
 google-auth-oauthlib>=1.2
 google-api-python-client>=2.140
+numpy>=1.24  # для анализа громкости аудио в highlight_finder.py
