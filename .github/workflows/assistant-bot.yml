@@ -1,0 +1,43 @@
+name: Assistant Bot
+
+# Публичный бот (резюме + редактор текста) — проверяет Telegram на новые
+# сообщения каждые ~15 минут, отвечает с учётом дневного лимита и
+# реферальных бонусов. Отдельный от Copywriter Bot (тот — личный, только
+# для владельца).
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  check-and-respond:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # нужно, чтобы закоммитить обновлённое состояние (лимиты/рефералы) обратно в репозиторий
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v4
+
+      - name: Установить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Установить зависимости
+        run: pip install -r requirements.txt
+
+      - name: Проверить сообщения и ответить
+        env:
+          ASSISTANT_BOT_TOKEN: ${{ secrets.ASSISTANT_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python assistant_bot.py
+
+      - name: Закоммитить состояние (лимиты, рефералы, offset)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add assistant_bot_state.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: обновить состояние assistant-бота [skip ci]"
+          git push
