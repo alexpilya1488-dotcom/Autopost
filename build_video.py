@@ -3,8 +3,9 @@
   - озвучки (mp3)
   - кадров персонажа (папка с PNG для цикла "разговора"; пока арт не готов —
     используется простая заглушка-кружок, чтобы пайплайн работал целиком)
-  - подписей: показываются ПО ПРЕДЛОЖЕНИЯМ, синхронно с длиной озвучки —
-    больше не наезжают друг на друга, как раньше, когда висел весь текст сразу.
+  - подписей: короткие фразы (не целые предложения), показываются С АНИМАЦИЕЙ
+    ПЕЧАТИ (буквы появляются слева на право, как будто их печатают),
+    расположены НАД персонажем.
 
 Как только будут готовы настоящие спрайты персонажа (см.
 faktik-animation-guide.md), просто положи PNG-кадры разговора в папку
@@ -17,7 +18,7 @@ import re
 import textwrap
 
 from moviepy.editor import (
-    AudioFileClip, ImageClip, CompositeVideoClip, concatenate_videoclips
+    AudioFileClip, ImageClip, VideoClip, CompositeVideoClip, concatenate_videoclips
 )
 from PIL import Image, ImageDraw, ImageFont
 
@@ -27,9 +28,19 @@ ACCENT_COLOR = (220, 38, 38)
 CHARACTER_FRAMES_DIR = "character_frames"  # папка с PNG-кадрами рта (talk-loop)
 FONT_PATH = None  # укажи путь к .ttf с кириллицей, если системный шрифт не подходит
 
-CAPTION_MAX_LINES = 3  # если предложение не влезает в столько строк — уменьшаем шрифт
+CAPTION_MAX_LINES = 2  # фразы теперь короче — двух строк достаточно
 MIN_SEGMENT_DURATION = 0.6  # секунд, чтобы даже короткое "Да!" не мелькало мгновенно
 MAX_TEXT_WIDTH = 940  # пикселей — оставляем поля по бокам от края 1080px
+MAX_WORDS_PER_CAPTION = 4  # дробим текст на короткие фразы, а не целые предложения
+
+CAPTION_START_SIZE = 52  # чуть меньше, чем раньше (было 64) — фразы короче
+CAPTION_MIN_SIZE = 28
+
+CAPTION_Y = 360  # субтитры в верхней трети — ВЫШЕ персонажа
+CHARACTER_Y = HEIGHT - 1180  # персонаж поднят выше (было HEIGHT - 900)
+
+TYPEWRITER_CHARS_PER_SEC = 22  # скорость "печати" букв
+TYPEWRITER_MAX_SHARE = 0.85  # печать длится не дольше этой доли времени показа фразы
 
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont:
@@ -53,7 +64,7 @@ def _line_width(line: str, font: ImageFont.FreeTypeFont) -> float:
     return _measure_draw.textlength(line, font=font)
 
 
-def _wrap_and_size(text: str, start_size: int = 64, min_size: int = 34):
+def _wrap_and_size(text: str, start_size: int = CAPTION_START_SIZE, min_size: int = CAPTION_MIN_SIZE):
     """Подбирает размер шрифта и перенос строк по РЕАЛЬНОЙ измеренной ширине
     текста (не на глаз), чтобы строки гарантированно не вылезали за экран."""
     size = start_size
@@ -82,25 +93,6 @@ def _wrap_and_size(text: str, start_size: int = 64, min_size: int = 34):
     return wrapped, font
 
 
-def _caption_frame(text: str) -> Image.Image:
-    """Рисует один кадр с подписью (одно предложение) поверх прозрачного слоя."""
-    img = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    wrapped, font = _wrap_and_size(text)
-    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, align="center")
-    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (WIDTH - text_w) / 2
-    y = HEIGHT - 480  # субтитры в нижней трети, над персонажем
-
-    for dx in (-3, 0, 3):
-        for dy in (-3, 0, 3):
-            draw.multiline_text((x + dx, y + dy), wrapped, font=font,
-                                 fill=(0, 0, 0, 255), align="center")
-    draw.multiline_text((x, y), wrapped, font=font, fill=(255, 255, 255, 255), align="center")
-    return img
-
-
 def _pil_to_array(img: Image.Image):
     import numpy as np
     return np.array(img)
@@ -111,22 +103,91 @@ def _split_sentences(script: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def _split_captions(script: str) -> list[str]:
+    """Дробит текст на короткие фразы (по паузам и по числу слов), а не на
+    целые предложения — так подписи ближе к тому, что произносится
+    "прямо сейчас", а не висят длинным куском."""
+    phrases = []
+    for sentence in _split_sentences(script):
+        # сначала режем по естественным паузам (запятая, точка с запятой, тире)
+        parts = re.split(r'(?<=[,;:—])\s+', sentence)
+        for part in parts:
+            words = part.split()
+            for i in range(0, len(words), MAX_WORDS_PER_CAPTION):
+                chunk = " ".join(words[i:i + MAX_WORDS_PER_CAPTION]).strip()
+                if chunk:
+                    phrases.append(chunk)
+    return phrases or [script]
+
+
+def _typewriter_clip(text: str, duration: float) -> VideoClip:
+    """Клип с подписью, где буквы появляются последовательно, как при
+    печати. Перенос строк и позиция фиксируются один раз по ПОЛНОМУ тексту
+    фразы, поэтому во время печати текст не "прыгает" и не перецентровывается."""
+    wrapped, font = _wrap_and_size(text)
+    lines = wrapped.split("\n")
+
+    line_widths = []
+    line_heights = []
+    for line in lines:
+        bbox = _measure_draw.textbbox((0, 0), line, font=font)
+        line_widths.append(bbox[2] - bbox[0])
+        line_heights.append(bbox[3] - bbox[1] + 8)  # небольшой запас по высоте строки
+
+    line_gap = 10
+    total_w = max(line_widths) if line_widths else 1
+    x0 = (WIDTH - total_w) / 2
+    y0 = CAPTION_Y
+
+    total_chars = sum(len(l) for l in lines) or 1
+    typing_time = min(duration * TYPEWRITER_MAX_SHARE, total_chars / TYPEWRITER_CHARS_PER_SEC)
+    typing_time = max(typing_time, 0.01)
+
+    def make_frame(t):
+        img = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        progress = min(t / typing_time, 1.0)
+        chars_to_show = int(round(total_chars * progress))
+
+        remaining = chars_to_show
+        y = y0
+        for line, lw, lh in zip(lines, line_widths, line_heights):
+            n = min(len(line), remaining)
+            shown = line[:n]
+            lx = x0 + (total_w - lw) / 2  # центрируем строку по её финальной ширине
+
+            if shown:
+                for dx in (-3, 0, 3):
+                    for dy in (-3, 0, 3):
+                        draw.text((lx + dx, y + dy), shown, font=font, fill=(0, 0, 0, 255))
+                draw.text((lx, y), shown, font=font, fill=(255, 255, 255, 255))
+
+            y += lh + line_gap
+            remaining -= n
+            if remaining <= 0:
+                break
+
+        return _pil_to_array(img)
+
+    return VideoClip(make_frame, duration=duration)
+
+
 def _caption_clips(script: str, total_duration: float):
-    """Разбивает текст на предложения и показывает их по очереди, с
-    длительностью пропорциональной длине предложения — чтобы подписи
-    примерно совпадали с темпом озвучки и не накладывались друг на друга."""
-    sentences = _split_sentences(script) or [script]
-    lengths = [max(len(s), 1) for s in sentences]
+    """Разбивает текст на короткие фразы и показывает их по очереди — с
+    длительностью, пропорциональной длине фразы, чтобы темп примерно
+    совпадал с озвучкой. Каждая фраза "печатается" по буквам."""
+    phrases = _split_captions(script)
+    lengths = [max(len(p), 1) for p in phrases]
     total_len = sum(lengths)
 
     clips = []
     t = 0.0
-    for i, (sentence, length) in enumerate(zip(sentences, lengths)):
-        is_last = i == len(sentences) - 1
+    for i, (phrase, length) in enumerate(zip(phrases, lengths)):
+        is_last = i == len(phrases) - 1
         dur = total_duration - t if is_last else total_duration * (length / total_len)
         dur = max(dur, MIN_SEGMENT_DURATION)
-        img = _caption_frame(sentence)
-        clip = ImageClip(_pil_to_array(img)).set_start(t).set_duration(dur)
+        clip = _typewriter_clip(phrase, dur).set_start(t)
         clips.append(clip)
         t += dur
     return clips
@@ -154,7 +215,7 @@ def _character_clip(duration: float):
         clip = ImageClip(_pil_to_array(placeholder)).set_duration(duration)
 
     clip = clip.resize(width=560)
-    clip = clip.set_position(("center", HEIGHT - 900))
+    clip = clip.set_position(("center", CHARACTER_Y))
     return clip
 
 
