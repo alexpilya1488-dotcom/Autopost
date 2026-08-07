@@ -1,15 +1,20 @@
 """
-Генерация факта и текста озвучки через бесплатный Gemini API.
+Генерация факта и текста озвучки.
 
-Получить бесплатный ключ: https://aistudio.google.com/apikey
-(бесплатный тариф Gemini даёт щедрую дневную квоту запросов).
+Основная нейронка — Gemini (бесплатный тариф).
+Если Gemini недоступен (закончилась дневная/минутная квота, сетевая ошибка
+и т.п.) — автоматически переключаемся на Groq (тоже есть бесплатный тариф),
+без остановки пайплайна.
 
-Хранить ключ в переменной окружения GEMINI_API_KEY, не в коде.
+Ключи брать из переменных окружения, не хранить в коде:
+  GEMINI_API_KEY — https://aistudio.google.com/apikey
+  GROQ_API_KEY   — https://console.groq.com/keys
 """
 
 import os
 import json
 import random
+import requests
 import google.generativeai as genai
 
 TOPICS = [
@@ -46,31 +51,72 @@ PROMPT_TEMPLATE = """Ты — сценарист коротких видео с 
 {{"title": "...", "script": "...", "description": "...", "tags": ["...", "..."]}}
 """
 
+GEMINI_MODEL = "gemini-2.0-flash"
+# llama-3.3-70b-versatile в Groq устарела — актуальная рекомендованная замена:
+GROQ_MODEL = "openai/gpt-oss-120b"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-def generate_fact(topic: str | None = None) -> dict:
-    """Возвращает dict с title/script/description/tags для одного видео."""
+
+def _generate_with_gemini(prompt: str) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("Задай переменную окружения GEMINI_API_KEY")
+        raise RuntimeError("GEMINI_API_KEY не задан")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
-
-    chosen_topic = topic or random.choice(TOPICS)
-    prompt = PROMPT_TEMPLATE.format(topic=chosen_topic)
-
+    model = genai.GenerativeModel(GEMINI_MODEL)
     response = model.generate_content(prompt)
-    raw = response.text.strip()
+    return response.text.strip()
 
-    # На случай, если модель всё же обернёт ответ в ```json ... ```
+
+def _generate_with_groq(prompt: str) -> str:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY не задан — резервная нейронка недоступна")
+
+    resp = requests.post(
+        GROQ_URL,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": GROQ_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.9,
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def _clean_json_text(raw: str) -> str:
+    """Убирает markdown-обёртку ```json ... ```, если модель всё же её добавила."""
+    raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.strip("`")
         if raw.lower().startswith("json"):
             raw = raw[4:]
         raw = raw.strip()
+    return raw
 
-    data = json.loads(raw)
+
+def generate_fact(topic: str | None = None) -> dict:
+    """Возвращает dict с title/script/description/tags для одного видео.
+    Сначала пробует Gemini, при любой ошибке (квота, сеть, что угодно)
+    молча переключается на Groq — пайплайн не останавливается."""
+    chosen_topic = topic or random.choice(TOPICS)
+    prompt = PROMPT_TEMPLATE.format(topic=chosen_topic)
+
+    try:
+        raw = _generate_with_gemini(prompt)
+        used = "gemini"
+    except Exception as gemini_error:
+        print(f"   [!] Gemini недоступен ({gemini_error}). Переключаюсь на Groq...")
+        raw = _generate_with_groq(prompt)
+        used = "groq"
+
+    data = json.loads(_clean_json_text(raw))
     data["topic"] = chosen_topic
+    print(f"   (сгенерировано через: {used})")
     return data
 
 
