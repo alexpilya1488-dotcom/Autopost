@@ -1,7 +1,6 @@
 """
-Генерация факта и текста озвучки: сначала пробуем Gemini (бесплатно),
-если он недоступен или упёрся в лимит — автоматически переключаемся
-на Groq (тоже бесплатно, другой поставщик — не зависим от одного лимита).
+Генерация факта и текста озвучки через бесплатный Gemini API, с
+автоматическим переключением на Groq при недоступности/лимите Gemini.
 
 Ключи: GEMINI_API_KEY (aistudio.google.com/apikey) и
 GROQ_API_KEY (console.groq.com).
@@ -18,6 +17,8 @@ TOPICS = [
     "человеческое тело", "география", "океан", "изобретения", "искусство",
 ]
 
+BASE_SHORTS_TAGS = ["shorts", "shortsvideo", "факты", "интересныефакты", "фактик"]
+
 PROMPT_TEMPLATE = """Ты — сценарист коротких видео с интересными фактами для YouTube Shorts.
 Тема: {topic}.
 
@@ -27,8 +28,13 @@ PROMPT_TEMPLATE = """Ты — сценарист коротких видео с 
 2. script — текст озвучки от лица дерзкого мультяшного персонажа по имени
    "Фактик": 4-6 коротких предложений, разговорный стиль, с эмоциями
    (удивление/сарказм/восторг), без канцелярита. Ровно один факт, без воды.
-3. description — короткое описание видео для YouTube (2-3 предложения) + 5 хэштегов
-4. tags — список из 8-10 ключевых слов для YouTube (массив строк)
+3. description — короткое описание видео для YouTube (2-3 предложения), в
+   конце обязательно добавь строку с хэштегами: #Shorts #факты и ещё 3-4
+   хэштега по теме факта
+4. tags — список из 10-12 ключевых слов и коротких фраз для поиска на
+   YouTube Shorts: несколько общих (shorts, факты, интересныефакты) и
+   несколько узких, конкретно про тему факта (например, если факт про
+   космос — "космос", "астрономия", "планеты" и т.п.)
 
 Верни СТРОГО валидный JSON без markdown-обёртки, вот такой формы:
 {{"title": "...", "script": "...", "description": "...", "tags": ["...", "..."]}}
@@ -74,6 +80,26 @@ def _generate_via_groq(prompt: str) -> dict:
     return _parse_json_response(text)
 
 
+def _normalize_tags(tags, topic: str) -> list[str]:
+    result = []
+    seen = set()
+
+    def add(tag):
+        t = str(tag).strip().lower().replace("#", "")
+        if t and t not in seen:
+            seen.add(t)
+            result.append(t)
+
+    for t in BASE_SHORTS_TAGS:
+        add(t)
+    add(topic)
+    if isinstance(tags, list):
+        for t in tags:
+            add(t)
+
+    return result[:15]
+
+
 def generate_fact(topic: str | None = None) -> dict:
     """Возвращает dict с title/script/description/tags для одного видео."""
     chosen_topic = topic or random.choice(TOPICS)
@@ -94,6 +120,11 @@ def generate_fact(topic: str | None = None) -> dict:
             )
 
     data["topic"] = chosen_topic
+    data["tags"] = _normalize_tags(data.get("tags"), chosen_topic)
+
+    if "#shorts" not in data.get("description", "").lower():
+        data["description"] = data.get("description", "").rstrip() + "\n\n#Shorts #факты #интересныефакты"
+
     return data
 
 
