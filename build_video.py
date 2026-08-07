@@ -22,7 +22,7 @@ from moviepy.editor import (
 from PIL import Image, ImageDraw, ImageFont
 
 WIDTH, HEIGHT = 1080, 1920
-BG_COLOR = (10, 3, 3)          # тёмный фон под стиль карты безопасности :)
+BACKGROUND_IMAGE = "background.png"  # положи файл в корень репозитория рядом с main.py
 ACCENT_COLOR = (220, 38, 38)
 CHARACTER_FRAMES_DIR = "character_frames"  # папка с PNG-кадрами рта (talk-loop)
 FONT_PATH = None  # укажи путь к .ttf с кириллицей, если системный шрифт не подходит
@@ -158,11 +158,21 @@ def _character_clip(duration: float):
     return clip
 
 
+def _load_background() -> Image.Image:
+    if os.path.exists(BACKGROUND_IMAGE):
+        img = Image.open(BACKGROUND_IMAGE).convert("RGB")
+        if img.size != (WIDTH, HEIGHT):
+            img = img.resize((WIDTH, HEIGHT), Image.LANCZOS)
+        return img
+    # запасной вариант, если картинку забыли положить в репозиторий
+    return Image.new("RGB", (WIDTH, HEIGHT), (10, 3, 3))
+
+
 def build_video(audio_path: str, script_text: str, out_path: str = "output.mp4") -> str:
     audio = AudioFileClip(audio_path)
     duration = audio.duration
 
-    bg = ImageClip(_pil_to_array(Image.new("RGB", (WIDTH, HEIGHT), BG_COLOR))).set_duration(duration)
+    bg = ImageClip(_pil_to_array(_load_background())).set_duration(duration)
     character = _character_clip(duration)
     captions = _caption_clips(script_text, duration)
 
