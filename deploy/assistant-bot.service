@@ -1,0 +1,16 @@
+[Unit]
+Description=Assistant Telegram Bot (autopost/assistant_bot.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/autopost
+EnvironmentFile=/opt/autopost/.env
+ExecStart=/usr/bin/python3 /opt/autopost/run_server.py
+Restart=always
+RestartSec=5
+User=botrunner
+
+[Install]
+WantedBy=multi-user.target
