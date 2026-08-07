@@ -7,6 +7,10 @@
     ПЕЧАТИ (буквы появляются слева на право, как будто их печатают),
     расположены НАД персонажем.
 
+Написано под moviepy 2.x (API изменился в v2.0: нет moviepy.editor,
+методы .set_* переименованы в .with_*, .resize -> .resized).
+См. requirements.txt — версия moviepy закреплена как 2.x.
+
 Как только будут готовы настоящие спрайты персонажа (см.
 faktik-animation-guide.md), просто положи PNG-кадры разговора в папку
 и передай её путь в CHARACTER_FRAMES_DIR.
@@ -17,7 +21,7 @@ import os
 import re
 import textwrap
 
-from moviepy.editor import (
+from moviepy import (
     AudioFileClip, ImageClip, VideoClip, CompositeVideoClip, concatenate_videoclips
 )
 from PIL import Image, ImageDraw, ImageFont
@@ -187,7 +191,7 @@ def _caption_clips(script: str, total_duration: float):
         is_last = i == len(phrases) - 1
         dur = total_duration - t if is_last else total_duration * (length / total_len)
         dur = max(dur, MIN_SEGMENT_DURATION)
-        clip = _typewriter_clip(phrase, dur).set_start(t)
+        clip = _typewriter_clip(phrase, dur).with_start(t)
         clips.append(clip)
         t += dur
     return clips
@@ -204,7 +208,7 @@ def _character_clip(duration: float):
         i = 0
         while t < duration:
             step = 1 / fps_frames
-            clips.append(ImageClip(frames[i % len(frames)]).set_duration(min(step, duration - t)))
+            clips.append(ImageClip(frames[i % len(frames)]).with_duration(min(step, duration - t)))
             t += step
             i += 1
         clip = concatenate_videoclips(clips, method="compose")
@@ -212,10 +216,10 @@ def _character_clip(duration: float):
         placeholder = Image.new("RGBA", (500, 500), (0, 0, 0, 0))
         d = ImageDraw.Draw(placeholder)
         d.ellipse([20, 20, 480, 480], fill=ACCENT_COLOR + (255,))
-        clip = ImageClip(_pil_to_array(placeholder)).set_duration(duration)
+        clip = ImageClip(_pil_to_array(placeholder)).with_duration(duration)
 
-    clip = clip.resize(width=560)
-    clip = clip.set_position(("center", CHARACTER_Y))
+    clip = clip.resized(width=560)
+    clip = clip.with_position(("center", CHARACTER_Y))
     return clip
 
 
@@ -233,15 +237,16 @@ def build_video(audio_path: str, script_text: str, out_path: str = "output.mp4")
     audio = AudioFileClip(audio_path)
     duration = audio.duration
 
-    bg = ImageClip(_pil_to_array(_load_background())).set_duration(duration)
+    bg = ImageClip(_pil_to_array(_load_background())).with_duration(duration)
     character = _character_clip(duration)
     captions = _caption_clips(script_text, duration)
 
     video = CompositeVideoClip([bg, character] + captions, size=(WIDTH, HEIGHT))
-    video = video.set_audio(audio)
+    video = video.with_audio(audio)
     video.write_videofile(out_path, fps=30, codec="libx264", audio_codec="aac")
     return out_path
 
 
 if __name__ == "__main__":
     build_video("voice.mp3", "Осьминоги имеют три сердца. Два из них перестают биться во время плавания. Вот такие дела!")
+
