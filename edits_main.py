@@ -123,7 +123,14 @@ def make_one_edit(index: int, privacy_status: str, dry_run: bool, state: dict) -
     track = pick_track()
 
     print(f"Нарезка {index}: 3/4 Собираю клип...")
-    video_path = build_edit_clip(trailer["url"], start, end, track, out_path=f"edit_output_{index}.mp4")
+    # Ссылки Steam на трейлер подписаны токеном с ограниченным временем жизни
+    # (?t=... в URL). Между тем, как мы её получили (в _get_trailer_for_run),
+    # и этим моментом уже прошло время на поиск яркого момента — берём СВЕЖУЮ
+    # ссылку прямо перед финальной сборкой, чтобы не словить протухший токен
+    # и оборванное/повреждённое чтение видео (см. _validate_clip ниже —
+    # дополнительная страховка на случай, если всё равно что-то пойдёт не так).
+    fresh_trailer = get_trailer_by_id(trailer["identifier"]) or trailer
+    video_path = build_edit_clip(fresh_trailer["url"], start, end, track, out_path=f"edit_output_{index}.mp4")
 
     caption = _generate_caption(trailer["title"], trailer["trailer_name"])
     description = (

@@ -17,6 +17,7 @@ trending_music.py (или оставляет оригинальный звук �
 именно их (см. _detect_letterbox_crop), и только потом кадрируем под 9:16.
 """
 
+import json
 import re
 import subprocess
 
@@ -68,6 +69,34 @@ def _detect_letterbox_crop(video_url: str, probe_start: float, probe_seconds: fl
     return ""
 
 
+def _validate_clip(path: str, expected_duration: float) -> None:
+    """Проверяет, что собранный файл — реально валидное, проигрываемое видео,
+    а не побитый огрызок (например, из-за протухшего токена в ссылке на
+    трейлер, оборвавшего чтение сети посреди сборки). YouTube в таких
+    случаях молча принимает загрузку, а потом падает с "Ошибка обработки"
+    уже после публикации — дешевле поймать это тут, до аплоада."""
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-show_entries", "stream=codec_type", "-of", "json", path],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        info = json.loads(proc.stdout)
+    except Exception as e:
+        raise RuntimeError(f"Не удалось проверить собранный клип {path}: {e}") from e
+
+    has_video = any(s.get("codec_type") == "video" for s in info.get("streams", []))
+    duration = float((info.get("format") or {}).get("duration") or 0)
+
+    if not has_video:
+        raise RuntimeError(f"Собранный клип {path} без видеодорожки — похоже на повреждённый файл")
+    if duration < expected_duration * 0.8:
+        raise RuntimeError(
+            f"Собранный клип {path} короче ожидаемого ({duration:.1f}s из {expected_duration:.1f}s) "
+            "— похоже на обрыв чтения источника (протухшая ссылка/сетевая ошибка)"
+        )
+
+
 def build_edit_clip(
     video_url: str,
     start: float,
@@ -117,6 +146,7 @@ def build_edit_clip(
     ]
 
     subprocess.run(cmd, check=True)
+    _validate_clip(out_path, duration)
     return out_path
 
 
