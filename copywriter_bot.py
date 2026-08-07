@@ -36,11 +36,20 @@ from generate_fact import _generate_with_gemini, _generate_with_groq
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 STATE_FILE = "telegram_copywriter_state.json"
 
+# Имя для подписи, если формат текста подразумевает подпись (коммерческое
+# предложение, письмо и т.п.) — поменяй под себя.
+SIGNATURE_NAME = "Принималкин"
+
 COPY_PROMPT_TEMPLATE = """Ты — опытный копирайтер-фрилансер. Клиент прислал бриф на текст.
 Подготовь ГОТОВЫЙ черновик текста по этому брифу — не план и не вопросы, а
 финальный текст, который можно почти без правок отправить клиенту. Если в
 брифе не хватает деталей (тон, объём, площадка) — сделай разумные
 предположения сам и не проси уточнений, просто напиши.
+
+Если формат текста подразумевает подпись автора (коммерческое предложение,
+письмо и т.п.) — подписывай ТОЛЬКО именем "{signature_name}", без
+должности/email/телефона и без плейсхолдеров вида "[Ваше имя]" — либо
+контактных данных вообще не указывай.
 
 Бриф от клиента:
 ---
@@ -78,7 +87,7 @@ def _save_state(state: dict) -> None:
 
 
 def _draft_copy(brief: str) -> str:
-    prompt = COPY_PROMPT_TEMPLATE.format(brief=brief)
+    prompt = COPY_PROMPT_TEMPLATE.format(brief=brief, signature_name=SIGNATURE_NAME)
     try:
         raw = _generate_with_gemini(prompt)
         used = "gemini"
