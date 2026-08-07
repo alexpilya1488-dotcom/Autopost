@@ -36,6 +36,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
@@ -51,5 +52,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: videos
-          path: output_*.mp4
+          path: |
+            output_*.mp4
+            movie_output_*.mp4
           if-no-files-found: ignore
