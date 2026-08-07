@@ -20,7 +20,7 @@ import json
 import os
 
 from generate_fact import _generate_with_gemini, _generate_with_groq, _clean_json_text
-from game_trailer_source import pick_trailer, get_trailer_by_id
+from game_trailer_source import pick_trailer, get_trailer_by_id, download_trailer
 from highlight_finder import find_highlight
 from trending_music import pick_track
 from build_edit_video import build_edit_clip
@@ -93,10 +93,11 @@ def _get_trailer_for_run(state: dict) -> dict:
 
 
 def make_one_edit(index: int, privacy_status: str, dry_run: bool, state: dict) -> None:
-    print(f"\n=== Нарезка {index}: 1/4 Выбираю трейлер... ===")
+    print(f"\n=== Нарезка {index}: 1/5 Выбираю трейлер... ===")
 
     # Если у выбранного трейлера не нашлось свободного яркого момента —
     # пробуем другой; ограничиваем число попыток, чтобы не зациклиться.
+    source_path = f"trailer_source_{index}.mp4"
     max_attempts = 5
     for attempt in range(1, max_attempts + 1):
         trailer = _get_trailer_for_run(state)
@@ -106,10 +107,13 @@ def make_one_edit(index: int, privacy_status: str, dry_run: bool, state: dict) -
         print(f"   Игра: {trailer['title']} — {trailer['trailer_name']} "
               f"({trailer['duration']:.0f}s) — {trailer['source_page']}")
 
-        print(f"Нарезка {index}: 2/4 Ищу яркий момент...")
+        print(f"Нарезка {index}: 2/5 Скачиваю трейлер...")
+        download_trailer(trailer["url"], source_path)
+
+        print(f"Нарезка {index}: 3/5 Ищу яркий момент...")
         used_ranges = [tuple(r) for r in entry["used_ranges"]]
         try:
-            start, end = find_highlight(trailer["url"], trailer["duration"], used_ranges=used_ranges)
+            start, end = find_highlight(source_path, trailer["duration"], used_ranges=used_ranges)
             break
         except RuntimeError as e:
             print(f"   [!] {e} — помечаю трейлер исчерпанным и беру другой (попытка {attempt}/{max_attempts}).")
@@ -122,15 +126,9 @@ def make_one_edit(index: int, privacy_status: str, dry_run: bool, state: dict) -
 
     track = pick_track()
 
-    print(f"Нарезка {index}: 3/4 Собираю клип...")
-    # Ссылки Steam на трейлер подписаны токеном с ограниченным временем жизни
-    # (?t=... в URL). Между тем, как мы её получили (в _get_trailer_for_run),
-    # и этим моментом уже прошло время на поиск яркого момента — берём СВЕЖУЮ
-    # ссылку прямо перед финальной сборкой, чтобы не словить протухший токен
-    # и оборванное/повреждённое чтение видео (см. _validate_clip ниже —
-    # дополнительная страховка на случай, если всё равно что-то пойдёт не так).
-    fresh_trailer = get_trailer_by_id(trailer["identifier"]) or trailer
-    video_path = build_edit_clip(fresh_trailer["url"], start, end, track, out_path=f"edit_output_{index}.mp4")
+    print(f"Нарезка {index}: 4/5 Собираю клип...")
+    video_path = build_edit_clip(source_path, start, end, track, out_path=f"edit_output_{index}.mp4")
+    os.remove(source_path)
 
     caption = _generate_caption(trailer["title"], trailer["trailer_name"])
     description = (
@@ -149,7 +147,7 @@ def make_one_edit(index: int, privacy_status: str, dry_run: bool, state: dict) -
         print(f"Нарезка {index}: готово (dry-run, без публикации): {video_path}")
         return
 
-    print(f"Нарезка {index}: 4/4 Публикую на YouTube...")
+    print(f"Нарезка {index}: 5/5 Публикую на YouTube...")
     upload_video(
         video_path,
         title=caption["title"],
