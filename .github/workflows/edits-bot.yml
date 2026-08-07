@@ -1,0 +1,70 @@
+name: Edits Bot
+
+# Нарезки ярких моментов из public-domain фильмов (Internet Archive) под
+# трендовую музыку из trending_music/. Два запуска в день — время можно
+# поменять под себя (сейчас 09:00 и 21:00 UTC).
+on:
+  schedule:
+    - cron: '0 9 * * *'
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+    inputs:
+      privacy:
+        description: 'Приватность видео: public / unlisted / private'
+        required: false
+        default: 'public'
+      dry_run:
+        description: 'true = собрать видео, но не публиковать (для проверки)'
+        required: false
+        default: 'false'
+
+jobs:
+  make-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # нужно, чтобы закоммитить обновлённый edits_state.json обратно в репозиторий
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v4
+
+      - name: Установить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Установить ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Установить зависимости
+        run: pip install -r requirements.txt
+
+      - name: Запустить пайплайн нарезок
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          ARGS="--privacy ${{ github.event.inputs.privacy || 'public' }}"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          python edits_main.py $ARGS
+
+      - name: Сохранить собранные нарезки как файлы для скачивания
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edits
+          path: edit_output_*.mp4
+          if-no-files-found: ignore
+
+      - name: Закоммитить обновлённое состояние (какие моменты уже использованы)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add edits_state.json trending_music_state.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: обновить состояние нарезок [skip ci]"
+          git push
