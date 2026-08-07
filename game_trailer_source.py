@@ -12,10 +12,17 @@ API (store.steampowered.com/api/...). Это не чей-то YouTube-аплоа
 допущение, что уже принято для trending_music.py.
 
 Технически: Steam отдаёт трейлеры как HLS/DASH (поля hls_h264 / dash_h264
-в ответе appdetails) — прямых .mp4 ссылок в текущем API уже нет. ffmpeg
-прекрасно читает HLS-плейлисты напрямую по URL (так же, как обычный mp4),
-так что highlight_finder.py и build_edit_video.py используют эти ссылки
-без каких-либо изменений.
+в ответе appdetails) — прямых .mp4 ссылок в текущем API уже нет.
+
+ВАЖНО: seek по сети (-ss ПЕРЕД -i в ffmpeg) на этом HLS/fMP4-источнике
+ломает поток — воспроизведено дважды на реальных прогонах (Invalid NAL
+unit size, "partial file", итоговый файл без видеодорожки или короче
+ожидаемого). Похоже на известный класс проблем ffmpeg с seek по
+сегментированному fMP4 через HLS. Поэтому download_trailer() качает
+трейлер ЦЕЛИКОМ одним линейным проходом БЕЗ seek (трейлеры короткие,
+до 4 минут — не накладно), и все дальнейшие операции (поиск яркого
+момента, обрезка) делает над уже локальным файлом, где seek полностью
+надёжен.
 """
 
 import random
@@ -112,6 +119,14 @@ def get_trailers(appid: int) -> list[dict]:
 
     trailers.sort(key=lambda t: not t["highlight"])  # официальный "главный" трейлер первым
     return trailers
+
+
+def download_trailer(url: str, out_path: str) -> str:
+    """Скачивает трейлер целиком одним последовательным проходом (без
+    seek) в локальный файл — см. предупреждение в докстринге модуля."""
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", url, "-c", "copy", out_path]
+    subprocess.run(cmd, check=True, timeout=120)
+    return out_path
 
 
 def get_trailer_by_id(identifier: str) -> dict | None:
