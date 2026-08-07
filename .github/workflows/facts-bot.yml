@@ -2,8 +2,8 @@ name: Facts Bot
 
 on:
   schedule:
-    - cron: '0 12 * * *'
-  workflow_dispatch:
+    - cron: '0 12 * * *'  # каждый день в 12:00 UTC — поменяй время как удобно
+  workflow_dispatch:       # ручной запуск кнопкой во вкладке Actions
     inputs:
       privacy:
         description: 'Приватность видео: public / unlisted / private'
@@ -13,10 +13,6 @@ on:
         description: 'true = собрать видео, но не публиковать (для проверки)'
         required: false
         default: 'false'
-      count:
-        description: 'Сколько видео сделать (для теста ставь 1)'
-        required: false
-        default: '2'
 
 jobs:
   make-and-publish:
@@ -40,11 +36,12 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
-          ARGS="--privacy ${{ github.event.inputs.privacy || 'public' }} --count ${{ github.event.inputs.count || '2' }}"
+          ARGS="--privacy ${{ github.event.inputs.privacy || 'public' }}"
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
           fi
@@ -55,5 +52,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: videos
-          path: output_*.mp4
+          path: |
+            output_*.mp4
+            movie_output_*.mp4
           if-no-files-found: ignore
