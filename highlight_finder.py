@@ -1,10 +1,10 @@
 """
-Поиск "яркого момента" в фильме — БЕЗ скачивания фильма целиком.
+Поиск "яркого момента" в видео (трейлере игры) — БЕЗ скачивания ролика
+целиком.
 
-Как это работает: ffmpeg умеет читать аудиодорожку прямо по HTTP-ссылке на
-файл, используя Range-запросы (архив archive.org их поддерживает), поэтому
-локально не сохраняется ничего, кроме самого аудиопотока (десятки МБ, а не
-сотни МБ видео).
+Как это работает: ffmpeg умеет читать аудиодорожку прямо по HTTP/HLS-ссылке
+на файл через Range-запросы, поэтому локально не сохраняется ничего, кроме
+самого аудиопотока — а трейлеры и так короткие (обычно 1-3 минуты).
 
 ЧЕСТНО О ТОЧНОСТИ: у нас нет доступа к модели, которая реально понимает
 "смешно" или "интересно" в смысле сюжета/шутки. Вместо этого используется
@@ -83,14 +83,13 @@ def find_highlight(
             continue
         return round(start, 2), round(end, 2)
 
-    raise RuntimeError("Не нашёл свободный яркий момент в этом фильме (похоже, всё уже использовано)")
+    raise RuntimeError("Не нашёл свободный яркий момент в этом видео (похоже, всё уже использовано)")
 
 
 if __name__ == "__main__":
-    import sys
-    from movie_source import pick_movie
+    from game_trailer_source import pick_trailer
 
-    movie = pick_movie()
-    print(f"Фильм: {movie['title']} ({movie['duration']/60:.1f} мин)")
-    s, e = find_highlight(movie["url"], movie["duration"])
+    trailer = pick_trailer()
+    print(f"Трейлер: {trailer['title']} — {trailer['trailer_name']} ({trailer['duration']:.0f}s)")
+    s, e = find_highlight(trailer["url"], trailer["duration"])
     print(f"Момент: {s:.1f}s - {e:.1f}s ({e-s:.1f}s)")
