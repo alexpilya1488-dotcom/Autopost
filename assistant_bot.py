@@ -4,32 +4,40 @@
 инструмент, отвечает только владельцу) — этот бот открыт для всех: любой
 может написать и получить готовый текст.
 
-Монетизация (пока без Stars-платежей — см. докстринг про 10-секундный SLA
-pre_checkout_query, для этого нужен постоянно работающий бот, не по
-расписанию): бесплатный дневной лимит на пользователя + бонусные генерации
-за рефералов. Оплата будет добавлена отдельным шагом, когда решится вопрос
-с постоянным хостингом.
+Монетизация: бесплатный дневной лимит на пользователя + бонусные генерации
+за рефералов + докупка пакетов генераций за Telegram Stars (/buy10,
+/buy35, /buy80 — см. STAR_PACKAGES).
+
+ВАЖНО про режим запуска: приём Stars-платежей требует ответа на
+pre_checkout_query в течение 10 секунд (ограничение Telegram) — раннер по
+расписанию (раз в N минут) для этого не подходит. Поэтому этот бот
+рассчитан на ПОСТОЯННО работающий процесс (см. run_server.py + deploy/ —
+инструкция по запуску на VPS через systemd), а не на GitHub Actions cron.
+run() при этом остаётся функцией одного прохода (полезно для теста/CLI),
+просто вызывается в бесконечном цикле из run_server.py с реальным
+long-poll таймаутом, а не raз в 15 минут.
 
 Команды:
   /start [ref_ID]  — приветствие; если пришли по реферальной ссылке
                      ?start=ref_<ID> — пригласившему начисляется бонус
   /resume <текст>  — готовое резюме/сопроводительное по описанию
   /edit <текст>    — вычитанный/улучшенный вариант текста
+  /buy             — меню пакетов генераций за Stars
+  /buy10 /buy35 /buy80 — купить конкретный пакет (выставляет счёт в Stars)
 
 Как получить токен бота — тот же способ, что и для copywriter_bot.py
 (через @BotFather), но это ДРУГОЙ, отдельный бот — секрет:
   ASSISTANT_BOT_TOKEN
 
-Работает через long-polling с сохранением состояния (лимиты, рефералы,
-offset) между запусками (ASSISTANT_STATE_FILE, коммитится обратно
-воркфлоу-раннером — тот же паттерн, что и у остальных ботов в репозитории).
-Раннер — cron каждые ~15 минут (.github/workflows/assistant-bot.yml) +
-workflow_dispatch.
+Состояние (лимиты, рефералы, offset) хранится в ASSISTANT_STATE_FILE
+локально на VPS (просто файл на диске — постоянный процесс, коммитить в
+git между запросами уже не нужно, в отличие от cron-ботов в этом
+репозитории).
 """
 
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import date
 
 import requests
 
@@ -41,6 +49,21 @@ STATE_FILE = "assistant_bot_state.json"
 FREE_DAILY_LIMIT = 3       # бесплатных генераций в день на пользователя
 REFERRAL_BONUS = 3         # бонусных генераций пригласившему за каждого нового реферала
 REFERRAL_WELCOME_BONUS = 2  # бонус новому пользователю, если он пришёл по реферальной ссылке
+
+# Пакеты докупки генераций за Telegram Stars (валюта XTR). Цифры — отправная
+# точка, легко поменять под себя.
+STAR_PACKAGES = {
+    "/buy10": {"stars": 50, "bonus": 10, "title": "10 генераций"},
+    "/buy35": {"stars": 150, "bonus": 35, "title": "35 генераций (выгоднее)"},
+    "/buy80": {"stars": 300, "bonus": 80, "title": "80 генераций (макс. выгода)"},
+}
+
+BUY_MENU_TEXT = """Докупить генераций за Telegram Stars:
+
+/buy10 — 10 генераций за 50 ⭐
+/buy35 — 35 генераций за 150 ⭐ (выгоднее)
+/buy80 — 80 генераций за 300 ⭐ (максимальная выгода)
+"""
 
 RESUME_PROMPT_TEMPLATE = """Ты — опытный HR-копирайтер. Составь ГОТОВЫЙ текст резюме или
 сопроводительного письма (определи по контексту, что просят, если не
@@ -74,18 +97,20 @@ WELCOME_TEXT = """Привет! Я помогаю быстро готовить 
 /resume <опиши себя или вакансию> — готовое резюме или сопроводительное письмо
 /edit <текст> — вычитка и улучшение текста
 
-Бесплатно: {free_limit} генерации в день. Хочешь больше — приглашай друзей:
-за каждого, кто зайдёт по твоей ссылке, +{referral_bonus} генераций.
+Бесплатно: {free_limit} генерации в день. Хочешь больше:
+— приглашай друзей: за каждого, кто зайдёт по твоей ссылке, +{referral_bonus} генераций
+— или докупи пакет за Telegram Stars: /buy
 
 Твоя реферальная ссылка:
 {referral_link}
 """
 
-NO_QUOTA_TEXT = """Лимит на сегодня закончился (бесплатно {free_limit}/день).
-Пригласи друга по ссылке — получишь +{referral_bonus} генераций:
-{referral_link}
+NO_QUOTA_TEXT = """Лимит на сегодня закончился (бесплатно {free_limit}/день). Варианты:
 
-Или возвращайся завтра, лимит обновится."""
+— пригласи друга по ссылке, получишь +{referral_bonus} генераций:
+{referral_link}
+— докупи пакет за Telegram Stars: /buy
+— или возвращайся завтра, лимит обновится."""
 
 
 def _tg_call(method: str, **params) -> dict:
@@ -175,6 +200,42 @@ def _handle_start(chat_id: str, payload: str | None, state: dict, bot_username: 
     _tg_call("sendMessage", chat_id=chat_id, text=text)
 
 
+def _handle_buy(chat_id: str, command: str) -> None:
+    pkg = STAR_PACKAGES.get(command)
+    if not pkg:
+        _tg_call("sendMessage", chat_id=chat_id, text=BUY_MENU_TEXT)
+        return
+    _tg_call(
+        "sendInvoice",
+        chat_id=chat_id,
+        title=pkg["title"],
+        description=f"{pkg['bonus']} дополнительных генераций в боте (резюме/редактор)",
+        payload=command,  # эхом вернётся в successful_payment.invoice_payload
+        currency="XTR",   # Telegram Stars — без provider_token, без copies за курс
+        prices=json.dumps([{"label": pkg["title"], "amount": pkg["stars"]}]),
+    )
+
+
+def _handle_pre_checkout_query(query: dict) -> None:
+    # Пакеты фиксированные и всегда валидны — подтверждаем без доп. проверок.
+    # ВАЖНО: Telegram требует ответ в течение 10 секунд, поэтому этот код
+    # обязан крутиться в постоянно работающем процессе (run_server.py), а
+    # не в раннере по расписанию.
+    _tg_call("answerPreCheckoutQuery", pre_checkout_query_id=query["id"], ok=True)
+
+
+def _handle_successful_payment(chat_id: str, payment: dict, state: dict) -> None:
+    payload = payment.get("invoice_payload")
+    pkg = STAR_PACKAGES.get(payload)
+    user = _get_user(state, chat_id)
+    if pkg:
+        user["bonus_uses"] += pkg["bonus"]
+        _tg_call("sendMessage", chat_id=chat_id, text=f"Спасибо! Начислено +{pkg['bonus']} генераций.")
+    else:
+        print(f"   [!] Неизвестный payload в successful_payment: {payload!r}")
+        _tg_call("sendMessage", chat_id=chat_id, text="Платёж получен, но не смог определить пакет — начислю вручную, напишите нам.")
+
+
 def _handle_service(chat_id: str, prompt_template: str, brief: str, state: dict, bot_username: str) -> None:
     user = _get_user(state, chat_id)
     if not brief.strip():
@@ -200,14 +261,18 @@ def _handle_service(chat_id: str, prompt_template: str, brief: str, state: dict,
     _tg_call("sendMessage", chat_id=chat_id, text=result)
 
 
-def run() -> None:
+def run(poll_timeout: int = 0) -> None:
+    """Один проход: забирает накопившиеся апдейты и обрабатывает их.
+    poll_timeout — сколько секунд ждать новых сообщений на стороне
+    Telegram (long-poll); 0 = вернуться сразу (для разового/CLI запуска),
+    в постоянном режиме run_server.py вызывает с ненулевым таймаутом."""
     bot_username = os.environ.get("ASSISTANT_BOT_USERNAME")
     if not bot_username:
         me = _tg_call("getMe")
         bot_username = me["username"]
 
     state = _load_state()
-    updates = _tg_call("getUpdates", offset=state["last_update_id"] + 1, timeout=0)
+    updates = _tg_call("getUpdates", offset=state["last_update_id"] + 1, timeout=poll_timeout)
 
     if not updates:
         print("Новых сообщений нет.")
@@ -215,11 +280,27 @@ def run() -> None:
 
     for update in updates:
         state["last_update_id"] = update["update_id"]
+
+        pre_checkout = update.get("pre_checkout_query")
+        if pre_checkout:
+            print(f"   pre_checkout_query от {pre_checkout['from']['id']}")
+            _handle_pre_checkout_query(pre_checkout)
+            continue
+
         message = update.get("message")
-        if not message or "text" not in message:
+        if not message:
             continue
 
         chat_id = str(message["chat"]["id"])
+
+        if "successful_payment" in message:
+            print(f"   Успешный платёж от {chat_id}")
+            _handle_successful_payment(chat_id, message["successful_payment"], state)
+            continue
+
+        if "text" not in message:
+            continue
+
         text = message["text"].strip()
         print(f"Сообщение от {chat_id}: {text[:80]}...")
 
@@ -233,6 +314,9 @@ def run() -> None:
         elif text.startswith("/edit"):
             brief = text[len("/edit"):].strip()
             _handle_service(chat_id, EDIT_PROMPT_TEMPLATE, brief, state, bot_username)
+        elif text.startswith("/buy"):
+            command = text.split()[0]
+            _handle_buy(chat_id, command)
         else:
             _tg_call("sendMessage", chat_id=chat_id, text="Не понял команду. Напиши /start, чтобы увидеть, что я умею.")
 
