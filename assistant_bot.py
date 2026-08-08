@@ -43,7 +43,14 @@ import requests
 
 from generate_fact import _generate_with_gemini, _generate_with_groq
 
-TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
+# Прямой адрес Telegram Bot API. Если сеть сервера блокирует api.telegram.org
+# напрямую (бывает у некоторых VPS/хостеров), задайте в .env переменную
+# TELEGRAM_API_BASE со своим реверс-прокси адресом, например Cloudflare
+# Worker вида "https://ваш-воркер.workers.dev/bot{token}/{method}" — формат
+# с плейсхолдерами {token}/{method} должен сохраниться.
+TELEGRAM_API = os.environ.get(
+    "TELEGRAM_API_BASE", "https://api.telegram.org/bot{token}/{method}"
+)
 STATE_FILE = "assistant_bot_state.json"
 
 FREE_DAILY_LIMIT = 3       # бесплатных генераций в день на пользователя
