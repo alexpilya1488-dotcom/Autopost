@@ -105,3 +105,37 @@ systemctl restart assistant-bot
 
 Пришлите вывод `systemctl status assistant-bot` и последние строки
 `journalctl -u assistant-bot -n 50` — разберёмся по логам, как обычно.
+
+### Ошибка "Network is unreachable" / бот не отвечает вообще
+
+Если в логах видно `ConnectionError` / `Network is unreachable` при обращении
+к `api.telegram.org`, а обычные сайты (`curl https://api.github.com`) при
+этом открываются — значит сеть сервера блокирует именно Telegram (бывает у
+некоторых хостеров). Решение — прокси через бесплатный Cloudflare Worker:
+
+1. На cloudflare.com зарегистрируйте бесплатный аккаунт → **Workers & Pages**
+   → **Create** → **Workers** → дайте имя, например `tg-proxy`.
+2. В открывшемся редакторе кода замените содержимое на:
+   ```js
+   export default {
+     async fetch(request) {
+       const url = new URL(request.url);
+       const target = "https://api.telegram.org" + url.pathname + url.search;
+       const resp = await fetch(target, {
+         method: request.method,
+         headers: request.headers,
+         body: ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer(),
+       });
+       return new Response(resp.body, { status: resp.status, headers: resp.headers });
+     },
+   };
+   ```
+3. **Deploy**. Скопируйте адрес воркера (вида
+   `https://tg-proxy.ваш-логин.workers.dev`).
+4. На сервере откройте `.env` (`nano /opt/autopost/.env`) и добавьте строку
+   (замените на свой адрес воркера, плейсхолдеры `{token}`/`{method}` — как
+   есть, не менять):
+   ```
+   TELEGRAM_API_BASE=https://tg-proxy.ваш-логин.workers.dev/bot{token}/{method}
+   ```
+5. Сохраните, затем `git pull && systemctl restart assistant-bot`.
